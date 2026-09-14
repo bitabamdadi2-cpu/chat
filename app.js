@@ -29,6 +29,11 @@ app.use(morgan("dev"));
 app.use(cors());
 app.use(limiter);
 app.use("/api/auth", authRouter);
+// uploaded media (avatars, message attachments) must stay publicly reachable
+// by URL (e.g. <img src>) without an Authorization header, so it is served
+// before the auth-gating middlewares below.
+app.use("/upload", express.static(`${__dirname}/Public`));
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 app.use(exportValidationData);
 app.use(isLogin);
@@ -36,9 +41,6 @@ app.use("/api/users", userRouter);
 app.use("/api/chats", chatRouter);
 app.use("/api/media", uploadRouter);
 app.use("/api/messages", messageRouter);
-app.use("/upload", express.static(`${__dirname}/Public`));
-
-app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 app.use((req, res, next) => {
   return res.status(404).json({
     message: "Route Not found",

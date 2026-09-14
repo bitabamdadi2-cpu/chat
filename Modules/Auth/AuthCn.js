@@ -1,4 +1,4 @@
-import { catchAsync } from "vanta-api";
+import { catchAsync, HandleERROR } from "vanta-api";
 import User from "../User/UserMd.js";
 import { sendAuthCode, verifyCode } from "../../Utils/smsHandler.js";
 
@@ -6,7 +6,7 @@ import jwt from "jsonwebtoken";
 export const auth = catchAsync(async (req, res, next) => {
   const { phoneNumber } = req.body;
   let user = await User.findOne({ phoneNumber });
-  const resultSms = sendAuthCode(phoneNumber);
+  const resultSms = await sendAuthCode(phoneNumber);
   if (!resultSms.success) {
     return res.status(500).json({
       success: false,
@@ -44,14 +44,11 @@ export const loginWithOtp = catchAsync(async (req, res, next) => {
   if (!resultVerify.success) {
     return next(new HandleERROR("invalid code", 401));
   }
-  let newUser;
   if (!user) {
-    user = await User.create({ phoneNumber,username });
-  } else {
-    newUser = user;
+    user = await User.create({ phoneNumber, username });
   }
   const token = jwt.sign(
-    { _id: user._id},
+    { _id: user._id },
     process.env.JWT_SECRET,
   );
   return res.status(200).json({
@@ -59,17 +56,17 @@ export const loginWithOtp = catchAsync(async (req, res, next) => {
     message: "login successfully",
     data: {
       token,
-      user:newUser,
+      user,
     },
   });
 });
 export const resendCode = catchAsync(async (req, res, next) => {
   const { phoneNumber } = req.body;
-  const resultSms = sendAuthCode(phoneNumber);
-  if (!resultSms) {
+  const resultSms = await sendAuthCode(phoneNumber);
+  if (!resultSms.success) {
     return res.status(500).json({
       success: false,
-      message: "sms sending failed",
+      message: resultSms.message || "sms sending failed",
     });
   }
   return res.status(200).json({

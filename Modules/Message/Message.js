@@ -8,7 +8,7 @@ import {
 } from "./MessageCn.js";
 const messageRouter = Router();
 messageRouter.route("/").post(sendMessage);
-messageRouter.route("/‌new-private").post(sendAndCreatePrivate);
+messageRouter.route("/new-private").post(sendAndCreatePrivate);
 messageRouter
   .route("/:id")
   .get(getAllMessagesOfChat)

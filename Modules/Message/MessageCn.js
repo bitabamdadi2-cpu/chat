@@ -1,8 +1,11 @@
 import ApiFeatures, { catchAsync, HandleERROR } from "vanta-api";
+import fs from "fs";
 import User from "../User/UserMd.js";
 import Message from "./MessageMd.js";
 import Media from "../Media/MediaMd.js";
 import Chat from "../Chat/ChatMd.js";
+import { __dirname } from "../../app.js";
+import { getIo, getSocketIds } from "../../Socket/index.js";
 export const getAllMessagesOfChat = catchAsync(async (req, res, next) => {
   const { id } = req.params;
   const user = await User.findById(req.userId);
@@ -32,6 +35,13 @@ export const getAllMessagesOfChat = catchAsync(async (req, res, next) => {
   return res.status(200).json(result);
 });
 
+// returns the list of user ids that are allowed to see a given chat
+const getChatMemberIds = (chat) => {
+  if (chat.type === "private") return chat.memberPrivateIds;
+  if (chat.type === "group") return chat.memberIds;
+  return [...new Set([...chat.adminIds, chat.ownerId])];
+};
+
 export const removeMessage = catchAsync(async (req, res, next) => {
   const { id } = req.params;
   const message = await Message.findById(id);
@@ -39,10 +49,18 @@ export const removeMessage = catchAsync(async (req, res, next) => {
     return next(new HandleERROR("you don't have a permission", 401));
   }
   await Message.findByIdAndDelete(id);
-  const media = await Media.findByIdAndDelete(message.mediaId);
-
-  if (fs.existsSync(`${__dirname}/Public/${media.file.filename}`)) {
-    fs.unlinkSync(`${__dirname}/Public/${media.file.filename}`);
+  if (message.mediaId) {
+    const media = await Media.findByIdAndDelete(message.mediaId);
+    if (media && fs.existsSync(`${__dirname}/Public/${media.file.filename}`)) {
+      fs.unlinkSync(`${__dirname}/Public/${media.file.filename}`);
+    }
+  }
+  const chat = await Chat.findById(message.chatId);
+  if (chat) {
+    const socketIds = getSocketIds(...getChatMemberIds(chat));
+    for (const socketId of socketIds) {
+      getIo().to(socketId).emit("messageDeleted", { _id: id, chatId: message.chatId });
+    }
   }
   return res.status(200).json({
     success: true,
@@ -59,7 +77,18 @@ export const update = catchAsync(async (req, res, next) => {
   const newMessage = await Message.findByIdAndUpdate(id, otherData, {
     runValidator: true,
     new: true,
-  });
+  }).populate([
+    { path: "userId", select: "username profilePictureId", populate: { path: "profilePictureId" } },
+    { path: "replyToMessageId" },
+    { path: "mediaId" },
+  ]);
+  const chat = await Chat.findById(newMessage.chatId);
+  if (chat) {
+    const socketIds = getSocketIds(...getChatMemberIds(chat));
+    for (const socketId of socketIds) {
+      getIo().to(socketId).emit("messageUpdated", newMessage);
+    }
+  }
   return res.status(200).json({
     success: true,
     message: "msg updated",
@@ -92,10 +121,19 @@ export const sendMessage = catchAsync(async (req, res, next) => {
   const message = await Message.create({ ...req.body, userId });
   chat.lastMessageId = message._id;
   await chat.save();
+  const populatedMessage = await Message.findById(message._id).populate([
+    { path: "userId", select: "username profilePictureId", populate: { path: "profilePictureId" } },
+    { path: "replyToMessageId" },
+    { path: "mediaId" },
+  ]);
+  const socketIds = getSocketIds(...getChatMemberIds(chat));
+  for (const socketId of socketIds) {
+    getIo().to(socketId).emit("newMessage", populatedMessage);
+  }
   return res.status(200).json({
     success: true,
     message: "msg send successfully",
-    data: message,
+    data: populatedMessage,
   });
 });
 export const sendAndCreatePrivate = catchAsync(async (req, res, next) => {
@@ -122,9 +160,29 @@ export const sendAndCreatePrivate = catchAsync(async (req, res, next) => {
   });
   newChat.lastMessageId = message._id;
   await newChat.save();
+  await User.findByIdAndUpdate(userId, { $push: { chatIds: newChat._id } });
+  await User.findByIdAndUpdate(receiverId, { $push: { chatIds: newChat._id } });
+  const populatedChat = await Chat.findById(newChat._id).populate([
+    {
+      path: "memberPrivateIds",
+      select: "username profilePictureId",
+      populate: { path: "profilePictureId" },
+    },
+    { path: "lastMessageId" },
+  ]);
+  const populatedMessage = await Message.findById(message._id).populate([
+    { path: "userId", select: "username profilePictureId", populate: { path: "profilePictureId" } },
+    { path: "replyToMessageId" },
+    { path: "mediaId" },
+  ]);
+  const socketIds = getSocketIds(receiverId);
+  for (const socketId of socketIds) {
+    getIo().to(socketId).emit("newChat", populatedChat);
+    getIo().to(socketId).emit("newMessage", populatedMessage);
+  }
   return res.status(201).json({
     success: true,
     message: "Private chat created and message sent successfully",
-    data: message,
+    data: { message: populatedMessage, chat: populatedChat },
   });
 });

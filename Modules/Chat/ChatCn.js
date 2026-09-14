@@ -1,9 +1,11 @@
 import ApiFeatures, { catchAsync, HandleERROR } from "vanta-api";
+import fs from "fs";
 import User from "../User/UserMd.js";
 import Chat from "./ChatMd.js";
 import Message from "../Message/MessageMd.js";
 import Media from "../Media/MediaMd.js";
-import { getSocketIds } from "../../Socket/index.js";
+import { __dirname } from "../../app.js";
+import { getIo, getSocketIds } from "../../Socket/index.js";
 export const getAll = catchAsync(async (req, res, next) => {
   const user = await User.findById(req.userId).populate({
     path: "chatIds",
@@ -96,10 +98,9 @@ export const updateGroupChannel = catchAsync(async (req, res, next) => {
   chat.profilePictureId = profilePictureId || chat.profilePictureId;
   chat.bio = bio || chat.bio;
   const newChat = await chat.save();
-  const memberIds = Chat.memberIds
-  const socketIds = getSocketIds(...memberIds)
+  const socketIds = getSocketIds(...chat.memberIds)
   for (let socketId of socketIds) {
-    io.to(socketId).emit('updatePublicChat', chat)
+    getIo().to(socketId).emit('updatePublicChat', newChat)
   }
   return res.status(200).json({
     message: "chat updated",
@@ -113,10 +114,6 @@ export const addOrRemoveMember = catchAsync(async (req, res, next) => {
   const selectUser = await User.findById(memberId)
     .select("username profilePictureId phoneNumber")
     .populate("profilePictureId");
-  const selectedSocketId=getSocketIds(memberId);
-  if(!type||!memberId){
-    return next(new HandleERROR("member id and type "))
-  }
   if (!type || !memberId) {
     return next(new HandleERROR("member id and type is required", 400));
   }
@@ -143,10 +140,9 @@ export const addOrRemoveMember = catchAsync(async (req, res, next) => {
     await Chat.findByIdAndUpdate(id, { $pull: { memberIds: memberId } });
     await User.findByIdAndUpdate(memberId, { $pull: { chatIds: id } });
   }
-  const memberIds = Chat.memberIds
-  const socketIds = getSocketIds(...memberIds)
+  const socketIds = getSocketIds(...chat.memberIds, memberId)
   for (let socketId of socketIds) {
-    io.to(socketId).emit('addOrRemoveMember', chat)
+    getIo().to(socketId).emit('addOrRemoveMember', { chatId: id, type, memberId, member: selectUser })
   }
 
   return res.status(201).json({
@@ -200,8 +196,7 @@ export const removeChat = catchAsync(async (req, res, next) => {
       }
     } else {
       await Chat.findByIdAndUpdate(id, {
-        $pull: { memberIds: id },
-        $pull: { adminIds: id },
+        $pull: { memberIds: req.userId, adminIds: req.userId },
       });
       await User.findByIdAndUpdate(req.userId, { $pull: { chatIds: id } });
       return res.status(200).json({
@@ -210,16 +205,16 @@ export const removeChat = catchAsync(async (req, res, next) => {
       });
     }
   }
-  const messages = await Message.deleteMany({ chatId: id });
+  const messages = await Message.find({ chatId: id });
   for (let msg of messages) {
     if (msg?.mediaId) {
       const media = await Media.findByIdAndDelete(msg.mediaId);
-
-      if (fs.existsSync(`${__dirname}/Public/${media.file.filename}`)) {
+      if (media && fs.existsSync(`${__dirname}/Public/${media.file.filename}`)) {
         fs.unlinkSync(`${__dirname}/Public/${media.file.filename}`);
       }
     }
   }
+  await Message.deleteMany({ chatId: id });
   return res.status(200).json({
     message: "chat removed",
     success: true,
